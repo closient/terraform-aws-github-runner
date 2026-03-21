@@ -73,6 +73,7 @@ variable "config" {
     }), {})
     zip                          = optional(string, null)
     enable_runner_deregistration = optional(bool, false)
+    enable_deregister_retry = optional(bool, true)
     github_app_parameters = optional(object({
       id         = map(string)
       key_base64 = map(string)

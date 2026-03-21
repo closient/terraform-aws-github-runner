@@ -67,3 +67,8 @@ output "instance_termination_handler" {
     lambda_role      = module.instance_termination_watcher[0].spot_termination_handler.lambda_role
   } : null
 }
+
+output "deregister_retry_queue_url" {
+  description = "URL of the SQS deregistration retry queue. Null when the queue is not enabled."
+  value       = var.instance_termination_watcher.enable ? module.instance_termination_watcher[0].deregister_retry_queue_url : null
+}

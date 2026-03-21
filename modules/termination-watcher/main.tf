@@ -16,6 +16,12 @@ locals {
     var.config.github_app_parameters.key_base64.arn,
   ] : []
 
+  # Inject the retry queue URL into both termination Lambda env vars so they can
+  # enqueue 422 retries. Only set when retry infrastructure is enabled.
+  retry_env_vars = local.enable_runner_deregistration && var.config.enable_deregister_retry ? {
+    DEREGISTER_RETRY_QUEUE_URL = aws_sqs_queue.deregister_retry[0].url
+  } : {}
+
   environment_variables = {
     ENABLE_METRICS_SPOT_WARNING = var.config.metrics != null ? var.config.metrics.enable && var.config.metrics.metric.enable_spot_termination_warning : false
     TAG_FILTERS                 = jsonencode(var.config.tag_filters)
@@ -25,7 +31,7 @@ locals {
     name                          = local.name,
     handler                       = "index.interruptionWarning",
     zip                           = local.lambda_zip,
-    environment_variables         = local.environment_variables
+    environment_variables         = merge(local.environment_variables, local.retry_env_vars)
     metrics_namespace             = var.config.metrics.namespace
     _deregistration_env_vars      = local.deregistration_env_vars
     _ssm_parameter_arns           = local.ssm_parameter_arns
