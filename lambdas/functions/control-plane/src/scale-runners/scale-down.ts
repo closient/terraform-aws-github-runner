@@ -89,7 +89,20 @@ async function getGitHubRunnerBusyState(client: Octokit, ec2runner: RunnerInfo, 
     );
     return false;
   }
-  logger.info(`Runner '${ec2runner.instanceId}' - GitHub Runner ID '${runnerId}' - Busy: ${state.busy}`);
+  // C-2580: log the full GitHub state alongside the busy flag so we can correlate
+  // scale-down decisions with the runner-side "shutdown signal" message that
+  // sometimes follows. We need to see status (online/offline) + labels +
+  // current job assignment, not just busy:true/false.
+  logger.info(`Runner '${ec2runner.instanceId}' - GitHub Runner ID '${runnerId}' - Busy: ${state.busy}`, {
+    diagnostic: 'busy-check',
+    instanceId: ec2runner.instanceId,
+    runnerId,
+    busy: state.busy,
+    status: state.status,
+    runnerName: state.name,
+    runnerOs: state.os,
+    labels: state.labels?.map((l) => l.name),
+  });
   return state.busy;
 }
 
@@ -129,6 +142,11 @@ function runnerMinimumTimeExceeded(runner: RunnerInfo): boolean {
 
 async function removeRunner(ec2runner: RunnerInfo, ghRunnerIds: number[]): Promise<void> {
   const githubAppClient = await getOrCreateOctokit(ec2runner);
+  // C-2580: Capture the busy-check → delete-attempt timing window so we can
+  // see if the runner flipped from idle→busy between the two API calls (the
+  // most likely race that would explain a runner agent receiving a shutdown
+  // signal mid-job without any TerminateInstances appearing in CloudTrail).
+  const busyCheckStartedAt = Date.now();
   try {
     const runnerList = ec2runner as unknown as RunnerList;
     if (runnerList.bypassRemoval) {
@@ -146,6 +164,7 @@ async function removeRunner(ec2runner: RunnerInfo, ghRunnerIds: number[]): Promi
     );
 
     if (states.every((busy) => busy === false)) {
+      const busyCheckCompletedAt = Date.now();
       const statuses = await Promise.all(
         ghRunnerIds.map(async (ghRunnerId) => {
           return (
@@ -162,8 +181,54 @@ async function removeRunner(ec2runner: RunnerInfo, ghRunnerIds: number[]): Promi
           ).status;
         }),
       );
+      const deleteCompletedAt = Date.now();
+
+      // C-2580: Re-check the runner's busy state IMMEDIATELY AFTER the delete
+      // returned 204. If GitHub now reports busy:true, we just deregistered a
+      // runner that picked up a job during the race window — and the runner
+      // agent will receive a "shutdown signal" via the long-poll channel even
+      // though we never called TerminateInstances. This explains the symptom
+      // we saw in C-2580 (mid-job shutdown signal, no CloudTrail evidence).
+      const postDeleteStates = await Promise.all(
+        ghRunnerIds.map(async (ghRunnerId) => {
+          try {
+            return await getGitHubSelfHostedRunnerState(githubAppClient, ec2runner, ghRunnerId);
+          } catch {
+            return null;
+          }
+        }),
+      );
+      const raceDetected = postDeleteStates.some((s) => s !== null && s.busy === true);
+
+      logger.info(`Runner '${ec2runner.instanceId}' deregister attempt complete`, {
+        diagnostic: 'deregister-attempt',
+        instanceId: ec2runner.instanceId,
+        ghRunnerIds,
+        busyCheckMs: busyCheckCompletedAt - busyCheckStartedAt,
+        deleteMs: deleteCompletedAt - busyCheckCompletedAt,
+        deleteStatuses: statuses,
+        raceDetected,
+        postDeleteBusy: postDeleteStates.map((s) => (s === null ? 'gone' : s.busy)),
+      });
 
       if (statuses.every((status) => status == 204)) {
+        if (raceDetected) {
+          // The runner flipped to busy between our busy-check and our delete.
+          // We just orphaned a running job. Log loudly so we can quantify how
+          // often this happens; a future change should probably re-issue the
+          // busy check inside the delete request or accept the lost job.
+          logger.warn(
+            `Runner '${ec2runner.instanceId}' was deregistered while it picked up a new job (race window ${
+              deleteCompletedAt - busyCheckStartedAt
+            }ms). The runner agent will receive a shutdown signal mid-job.`,
+            {
+              diagnostic: 'deregister-race-detected',
+              instanceId: ec2runner.instanceId,
+              ghRunnerIds,
+              raceWindowMs: deleteCompletedAt - busyCheckStartedAt,
+            },
+          );
+        }
         await terminateRunner(ec2runner.instanceId);
         logger.info(`AWS runner instance '${ec2runner.instanceId}' is terminated and GitHub runner is de-registered.`);
       } else {
@@ -204,8 +269,38 @@ async function evaluateAndRemoveRunners(
       logger.debug(
         `GitHub runners for AWS runner instance: '${ec2Runner.instanceId}': ${JSON.stringify(ghRunnersFiltered)}`,
       );
+
+      // C-2580: emit one structured decision log per runner so we can build a
+      // timeline correlating scale-down lambda runs with runner-side events.
+      const minimumTimeExceeded = runnerMinimumTimeExceeded(ec2Runner);
+      const bootExceeded = bootTimeExceeded(ec2Runner);
+      const ageSec = ec2Runner.launchTime
+        ? Math.floor((Date.now() - new Date(ec2Runner.launchTime).getTime()) / 1000)
+        : null;
+      let decision: string;
+      if (ghRunnersFiltered.length === 0) {
+        decision = bootExceeded ? 'mark-orphan' : 'wait-for-boot';
+      } else if (!minimumTimeExceeded) {
+        decision = 'keep-below-minimum-time';
+      } else if (idleCounter > 0) {
+        decision = 'keep-idle-pool';
+      } else {
+        decision = 'attempt-deregister';
+      }
+      logger.info(`Runner '${ec2Runner.instanceId}' decision: ${decision}`, {
+        diagnostic: 'scale-down-decision',
+        instanceId: ec2Runner.instanceId,
+        decision,
+        ageSec,
+        ghRunnersMatched: ghRunnersFiltered.length,
+        minimumTimeExceeded,
+        bootTimeExceeded: bootExceeded,
+        idleCounterBefore: idleCounter,
+        owner: ec2Runner.owner,
+      });
+
       if (ghRunnersFiltered.length) {
-        if (runnerMinimumTimeExceeded(ec2Runner)) {
+        if (minimumTimeExceeded) {
           if (idleCounter > 0) {
             idleCounter--;
             logger.info(`Runner '${ec2Runner.instanceId}' will be kept idle.`);
@@ -217,7 +312,7 @@ async function evaluateAndRemoveRunners(
             );
           }
         }
-      } else if (bootTimeExceeded(ec2Runner)) {
+      } else if (bootExceeded) {
         await markOrphan(ec2Runner.instanceId);
       } else {
         logger.debug(`Runner ${ec2Runner.instanceId} has not yet booted.`);
@@ -270,17 +365,37 @@ async function lastChanceCheckOrphanRunner(runner: RunnerList): Promise<boolean>
 async function terminateOrphan(environment: string): Promise<void> {
   try {
     const orphanRunners = await listEC2Runners({ environment, orphan: true });
+    // C-2580: structured visibility into orphan termination decisions; the
+    // offline+busy heuristic in lastChanceCheckOrphanRunner can mis-classify
+    // a runner mid-job as orphan if its long-poll heartbeat lapses.
+    logger.info(`Orphan sweep started`, {
+      diagnostic: 'orphan-sweep-start',
+      environment,
+      candidateCount: orphanRunners.length,
+    });
 
     for (const runner of orphanRunners) {
       if (runner.runnerId) {
         const isOrphan = await lastChanceCheckOrphanRunner(runner);
+        logger.info(`Orphan check for '${runner.instanceId}': ${isOrphan ? 'TERMINATE' : 'unmark'}`, {
+          diagnostic: 'orphan-decision',
+          instanceId: runner.instanceId,
+          runnerId: runner.runnerId,
+          isOrphan,
+        });
         if (isOrphan) {
           await terminateRunner(runner.instanceId);
         } else {
           await unMarkOrphan(runner.instanceId);
         }
       } else {
-        logger.info(`Terminating orphan runner '${runner.instanceId}'`);
+        logger.info(`Terminating orphan runner '${runner.instanceId}' (no runnerId tag)`, {
+          diagnostic: 'orphan-decision',
+          instanceId: runner.instanceId,
+          runnerId: null,
+          isOrphan: true,
+          reason: 'no-runner-id-tag',
+        });
         await terminateRunner(runner.instanceId).catch((e) => {
           logger.error(`Failed to terminate orphan runner '${runner.instanceId}'`, { error: e });
         });
