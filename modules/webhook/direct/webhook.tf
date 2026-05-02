@@ -7,16 +7,14 @@ resource "aws_lambda_function" "webhook" {
   s3_key            = var.config.lambda_s3_key != null ? var.config.lambda_s3_key : null
   s3_object_version = var.config.lambda_s3_object_version != null ? var.config.lambda_s3_object_version : null
   filename          = var.config.lambda_s3_bucket == null ? local.lambda_zip : null
-  # closient: always compute source_code_hash so in-place S3 zip replaces are picked up
-  # (was: var.config.lambda_s3_bucket == null ? filebase64sha256(local.lambda_zip) : null — bug C-2619)
-  source_code_hash = filebase64sha256(local.lambda_zip)
-  function_name    = "${var.config.prefix}-webhook"
-  role             = aws_iam_role.webhook_lambda.arn
-  handler          = "index.directWebhook"
-  runtime          = var.config.lambda_runtime
-  memory_size      = var.config.lambda_memory_size
-  timeout          = var.config.lambda_timeout
-  architectures    = [var.config.lambda_architecture]
+  source_code_hash  = var.config.lambda_s3_bucket == null ? filebase64sha256(local.lambda_zip) : null
+  function_name     = "${var.config.prefix}-webhook"
+  role              = aws_iam_role.webhook_lambda.arn
+  handler           = "index.directWebhook"
+  runtime           = var.config.lambda_runtime
+  memory_size       = var.config.lambda_memory_size
+  timeout           = var.config.lambda_timeout
+  architectures     = [var.config.lambda_architecture]
 
   environment {
     variables = {
