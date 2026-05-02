@@ -8,14 +8,16 @@ resource "aws_lambda_function" "ami_housekeeper" {
   s3_key            = var.lambda_s3_key != null ? var.lambda_s3_key : null
   s3_object_version = var.lambda_s3_object_version != null ? var.lambda_s3_object_version : null
   filename          = var.lambda_s3_bucket == null ? local.lambda_zip : null
-  source_code_hash  = var.lambda_s3_bucket == null ? filebase64sha256(local.lambda_zip) : null
-  function_name     = "${var.prefix}-ami-housekeeper"
-  role              = aws_iam_role.ami_housekeeper.arn
-  handler           = "index.handler"
-  runtime           = var.lambda_runtime
-  timeout           = var.lambda_timeout
-  memory_size       = var.lambda_memory_size
-  architectures     = [var.lambda_architecture]
+  # closient: always compute source_code_hash so in-place S3 zip replaces are picked up
+  # (was: var.lambda_s3_bucket == null ? filebase64sha256(local.lambda_zip) : null — bug C-2619)
+  source_code_hash = filebase64sha256(local.lambda_zip)
+  function_name    = "${var.prefix}-ami-housekeeper"
+  role             = aws_iam_role.ami_housekeeper.arn
+  handler          = "index.handler"
+  runtime          = var.lambda_runtime
+  timeout          = var.lambda_timeout
+  memory_size      = var.lambda_memory_size
+  architectures    = [var.lambda_architecture]
 
   environment {
     variables = {

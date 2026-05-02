@@ -1,10 +1,12 @@
 resource "aws_lambda_function" "pool" {
 
-  s3_bucket                      = var.config.lambda.s3_bucket != null ? var.config.lambda.s3_bucket : null
-  s3_key                         = var.config.lambda.s3_key != null ? var.config.lambda.s3_key : null
-  s3_object_version              = var.config.lambda.s3_object_version != null ? var.config.lambda.s3_object_version : null
-  filename                       = var.config.lambda.s3_bucket == null ? var.config.lambda.zip : null
-  source_code_hash               = var.config.lambda.s3_bucket == null ? filebase64sha256(var.config.lambda.zip) : null
+  s3_bucket         = var.config.lambda.s3_bucket != null ? var.config.lambda.s3_bucket : null
+  s3_key            = var.config.lambda.s3_key != null ? var.config.lambda.s3_key : null
+  s3_object_version = var.config.lambda.s3_object_version != null ? var.config.lambda.s3_object_version : null
+  filename          = var.config.lambda.s3_bucket == null ? var.config.lambda.zip : null
+  # closient: always compute source_code_hash so in-place S3 zip replaces are picked up
+  # (was: var.config.lambda.s3_bucket == null ? filebase64sha256(var.config.lambda.zip) : null — bug C-2619)
+  source_code_hash               = filebase64sha256(var.config.lambda.zip)
   function_name                  = "${var.config.prefix}-pool"
   role                           = aws_iam_role.pool.arn
   handler                        = "index.adjustPool"

@@ -21,14 +21,16 @@ resource "aws_lambda_function" "main" {
   s3_key            = var.lambda.s3_key != null ? var.lambda.s3_key : null
   s3_object_version = var.lambda.s3_object_version != null ? var.lambda.s3_object_version : null
   filename          = var.lambda.s3_bucket == null ? var.lambda.zip : null
-  source_code_hash  = var.lambda.s3_bucket == null ? filebase64sha256(var.lambda.zip) : null
-  function_name     = "${var.lambda.prefix}-${var.lambda.name}"
-  role              = aws_iam_role.main.arn
-  handler           = var.lambda.handler
-  runtime           = var.lambda.runtime
-  timeout           = var.lambda.timeout
-  memory_size       = var.lambda.memory_size
-  architectures     = [var.lambda.architecture]
+  # closient: always compute source_code_hash so in-place S3 zip replaces are picked up
+  # (was: var.lambda.s3_bucket == null ? filebase64sha256(var.lambda.zip) : null — bug C-2619)
+  source_code_hash = filebase64sha256(var.lambda.zip)
+  function_name    = "${var.lambda.prefix}-${var.lambda.name}"
+  role             = aws_iam_role.main.arn
+  handler          = var.lambda.handler
+  runtime          = var.lambda.runtime
+  timeout          = var.lambda.timeout
+  memory_size      = var.lambda.memory_size
+  architectures    = [var.lambda.architecture]
 
   environment {
     variables = local.environment_variable

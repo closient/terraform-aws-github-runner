@@ -9,11 +9,13 @@ locals {
 }
 
 resource "aws_lambda_function" "scale_up" {
-  s3_bucket                      = var.lambda_s3_bucket != null ? var.lambda_s3_bucket : null
-  s3_key                         = var.runners_lambda_s3_key != null ? var.runners_lambda_s3_key : null
-  s3_object_version              = var.runners_lambda_s3_object_version != null ? var.runners_lambda_s3_object_version : null
-  filename                       = var.lambda_s3_bucket == null ? local.lambda_zip : null
-  source_code_hash               = var.lambda_s3_bucket == null ? filebase64sha256(local.lambda_zip) : null
+  s3_bucket         = var.lambda_s3_bucket != null ? var.lambda_s3_bucket : null
+  s3_key            = var.runners_lambda_s3_key != null ? var.runners_lambda_s3_key : null
+  s3_object_version = var.runners_lambda_s3_object_version != null ? var.runners_lambda_s3_object_version : null
+  filename          = var.lambda_s3_bucket == null ? local.lambda_zip : null
+  # closient: always compute source_code_hash so in-place S3 zip replaces are picked up
+  # (was: var.lambda_s3_bucket == null ? filebase64sha256(local.lambda_zip) : null — bug C-2619)
+  source_code_hash               = filebase64sha256(local.lambda_zip)
   function_name                  = "${var.prefix}-scale-up"
   role                           = aws_iam_role.scale_up.arn
   handler                        = "index.scaleUpHandler"
