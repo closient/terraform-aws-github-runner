@@ -24,7 +24,7 @@ per-invocation census log line.
 Consumed by the Closient monorepo as release `v7.10.0-closient.1` (patched `runners.zip`
 asset + module source ref).
 
-**Upstream status: to be PR'd against `main` referencing #5085 once verified in production.**
+**Upstream status: PR'd as [#5228](https://github.com/github-aws-runners/terraform-aws-github-runner/pull/5228) (branch `fix/scale-down-idle-confirmation`, cherry-pick of the code commit onto upstream `main`), 2026-07-28, after 14h clean production verification. Fork retires when it ships in a release.**
 
 ## Historical (superseded)
 
