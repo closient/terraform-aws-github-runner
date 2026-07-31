@@ -79,8 +79,12 @@ Consumed by the Closient monorepo as release `v7.10.0-closient.2`. The `runners.
 is byte-identical to `v7.10.0-closient.1` — this patch touches only a rendered template, no
 Lambda code.
 
-**Upstream status: to be PR'd against `main`. Affects any consumer running with tracing
-disabled and `set -u` anywhere in user-data, so it is not Closient-specific.**
+**Upstream status: PR'd as
+[github-aws-runners/terraform-aws-github-runner#5233](https://github.com/github-aws-runners/terraform-aws-github-runner/pull/5233)
+(branch `fix/segment-unbound-under-set-u`, cut clean off upstream `main` so it carries only
+this fix, not the idle-confirmation patch). Retire this divergence once it merges. Affects
+any consumer running with tracing disabled and `set -u` anywhere in user-data, so it is not
+Closient-specific.**
 
 ## Historical (superseded)
 
